@@ -1,0 +1,630 @@
+
+<!-- =========================================================
+     LIMESURVEY SCRIPTED CHAT
+     Replace NAME1, NAME2, NAME3 and CHATLOG with your codes.
+     ========================================================= -->
+
+<div id="scripted-chat"
+     data-name1="{NAME1}"
+     data-name2="{NAME2}"
+     data-name3="{NAME3}">
+
+  <div class="sc-header">
+    <div class="sc-avatar sc-group-avatar">3</div>
+    <div class="sc-header-info">
+      <div class="sc-title">Group chat</div>
+      <div class="sc-subtitle">3 participants</div>
+    </div>
+  </div>
+
+  <div class="sc-messages" id="sc-messages">
+    <div class="sc-loading">
+      <span class="sc-spinner"></span>
+      Loading conversation...
+    </div>
+  </div>
+
+  <div class="sc-input-area">
+    <input id="sc-input"
+           type="text"
+           placeholder="Message..."
+           autocomplete="off" />
+
+    <button id="sc-send" type="button" aria-label="Send">
+      ➤
+    </button>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // =========================================================
+  // CONFIGURATION
+  // =========================================================
+
+  const CONFIG = {
+
+    // LimeSurvey question code storing the chat transcript
+    transcriptQuestion: "CHATLOG",
+
+    // Timing in milliseconds
+    initialReadTime: 500,
+
+    // Time simulated participant spends "writing"
+    writingTime: 500,
+
+    // Time to read user's message before typing
+    readTime: 300,
+
+    // Delay between scripted participant messages
+    interMessageDelay: 200,
+
+    // Enable input only when the user is expected to reply
+    // =======================================================
+
+    // Dialogue:
+    // Each turn occurs after the user sends a message.
+    // sender: 0, 1, or 2 (the three simulated participants)
+    // text: scripted response
+
+    dialogue: [
+      [
+        { sender: 0, text: "Hey everyone! How are you doing?" },
+        { sender: 1, text: "I'm good, thanks! What about you?" }
+      ],
+      [
+        { sender: 2, text: "That sounds interesting!" },
+        { sender: 0, text: "I agree, we should talk about it." }
+      ],
+      [
+        { sender: 1, text: "What do you all think?" },
+        { sender: 2, text: "Yeah, I'd like to hear everyone's opinion." }
+      ],
+      [
+        { sender: 0, text: "That's a good point." },
+        { sender: 1, text: "Definitely!" }
+      ]
+    ],
+
+    // Messages that appear when the chat starts
+    initialMessages: [
+      { sender: 0, text: "Hi! Welcome to the group chat." },
+      { sender: 1, text: "Hey! Nice to meet you." },
+      { sender: 2, text: "Hello everyone!" }
+    ]
+  };
+
+  // =========================================================
+  // CHAT INITIALIZATION
+  // =========================================================
+
+  const root = document.getElementById("scripted-chat");
+
+  if (!root || root.dataset.initialized === "true") {
+    return;
+  }
+
+  root.dataset.initialized = "true";
+
+  const messagesEl = root.querySelector("#sc-messages");
+  const inputEl = root.querySelector("#sc-input");
+  const sendEl = root.querySelector("#sc-send");
+
+  const names = [
+    root.dataset.name1,
+    root.dataset.name2,
+    root.dataset.name3
+  ].map(name => (name || "").trim());
+
+  // Distinct colors for participants
+  const participantColors = [
+    { bubble: "#ffffff", name: "#d35400", avatar: "#d35400" },
+    { bubble: "#f0e6ff", name: "#7d3c98", avatar: "#7d3c98" },
+    { bubble: "#e0f2f1", name: "#008577", avatar: "#008577" }
+  ];
+
+  let turn = 0;
+  let busy = true;
+  let ended = false;
+
+  const transcript = [];
+
+  // =========================================================
+  // HELPERS
+  // =========================================================
+
+  function wait(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  function timestamp() {
+    return new Date().toISOString();
+  }
+
+  function scrollToBottom() {
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  function addSystemMessage(text) {
+    const el = document.createElement("div");
+    el.className = "sc-system";
+    el.textContent = text;
+    messagesEl.appendChild(el);
+    scrollToBottom();
+  }
+
+  function addTypingIndicator(sender) {
+    const el = document.createElement("div");
+    el.className = "sc-typing";
+
+    el.setAttribute("aria-label", names[sender] + " is typing");
+
+    for (let i = 0; i < 3; i++) {
+      const dot = document.createElement("span");
+      el.appendChild(dot);
+    }
+
+    messagesEl.appendChild(el);
+    scrollToBottom();
+
+    return el;
+  }
+
+  function addMessage(sender, text, isUser) {
+    const message = document.createElement("div");
+    message.className = "sc-message " +
+      (isUser ? "user" : "bot");
+
+    const bubble = document.createElement("div");
+    bubble.className = "sc-bubble";
+
+    if (!isUser) {
+      const colors = participantColors[sender];
+
+      message.style.setProperty(
+        "--sc-bubble-color",
+        colors.bubble
+      );
+
+      message.style.setProperty(
+        "--sc-name-color",
+        colors.name
+      );
+
+      const name = document.createElement("div");
+      name.className = "sc-name";
+      name.textContent = names[sender];
+
+      message.appendChild(name);
+    }
+
+    bubble.textContent = text;
+    message.appendChild(bubble);
+
+    const meta = document.createElement("div");
+    meta.className = "sc-meta";
+
+    meta.textContent = new Date().toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+
+    message.appendChild(meta);
+
+    messagesEl.appendChild(message);
+    scrollToBottom();
+
+    transcript.push({
+      sender: isUser ? "user" : names[sender],
+      senderIndex: isUser ? null : sender,
+      text: text,
+      timestamp: timestamp()
+    });
+  }
+
+  // =========================================================
+  // SAVE TRANSCRIPT TO LIMESURVEY
+  // =========================================================
+
+  function saveTranscript() {
+    const code = CONFIG.transcriptQuestion;
+
+    // Standard LimeSurvey answer input selector
+    const answer = document.querySelector(
+      "#answer" + code
+    );
+
+    if (answer) {
+      answer.value = JSON.stringify(transcript);
+
+      // Notify LimeSurvey / any listeners
+      answer.dispatchEvent(
+        new Event("change", { bubbles: true })
+      );
+
+      return true;
+    }
+
+    console.warn(
+      "Chat transcript field not found:",
+      code
+    );
+
+    return false;
+  }
+
+  // =========================================================
+  // SCRIPTED PARTICIPANT MESSAGE
+  // =========================================================
+
+  async function botMessage(message) {
+    const sender = message.sender;
+
+    // Simulated reading time
+    await wait(CONFIG.readTime);
+
+    // Show writing animation
+    const typing = addTypingIndicator(sender);
+
+    // Simulated writing time
+    await wait(CONFIG.writingTime);
+
+    typing.remove();
+
+    addMessage(sender, message.text, false);
+
+    // Save after every message
+    saveTranscript();
+  }
+
+  // =========================================================
+  // START CONVERSATION
+  // =========================================================
+
+  async function startChat() {
+    messagesEl.innerHTML = "";
+
+    await wait(CONFIG.initialReadTime);
+
+    for (let i = 0; i < CONFIG.initialMessages.length; i++) {
+      const message = CONFIG.initialMessages[i];
+
+      await botMessage(message);
+
+      await wait(CONFIG.interMessageDelay);
+    }
+
+    busy = false;
+    inputEl.disabled = false;
+    sendEl.disabled = false;
+    inputEl.focus();
+  }
+
+  // =========================================================
+  // USER MESSAGE / SCRIPTED RESPONSE
+  // =========================================================
+
+  async function sendMessage() {
+    const text = inputEl.value.trim();
+
+    if (!text || busy || ended) {
+      return;
+    }
+
+    busy = true;
+    inputEl.disabled = true;
+    sendEl.disabled = true;
+
+    addMessage(null, text, true);
+
+    inputEl.value = "";
+
+    saveTranscript();
+
+    // Scripted response corresponding to the current turn
+    const responses = CONFIG.dialogue[turn];
+
+    if (!responses) {
+      ended = true;
+      addSystemMessage("The conversation has ended.");
+      saveTranscript();
+      return;
+    }
+
+    turn++;
+
+    for (let i = 0; i < responses.length; i++) {
+      await wait(CONFIG.interMessageDelay);
+
+      await botMessage(responses[i]);
+    }
+
+    busy = false;
+
+    inputEl.disabled = false;
+    sendEl.disabled = false;
+    inputEl.focus();
+  }
+
+  // =========================================================
+  // EVENT HANDLERS
+  // =========================================================
+
+  sendEl.addEventListener("click", sendMessage);
+
+  inputEl.addEventListener("keydown", function (event) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      sendMessage();
+    }
+  });
+
+  // =========================================================
+  // BEGIN
+  // =========================================================
+
+  inputEl.disabled = true;
+  sendEl.disabled = true;
+
+  // Initial transcript field value
+  saveTranscript();
+
+  startChat();
+
+})();
+</script>
+
+<style>
+#scripted-chat {
+  --sc-bg: #e9e5dc;
+  --sc-header: #527c70;
+  --sc-user: #d9fdd3;
+  --sc-text: #202c33;
+  --sc-muted: #667781;
+
+  font-family: Arial, Helvetica, sans-serif;
+  width: 100%;
+  max-width: 650px;
+  height: 600px;
+  margin: 20px auto;
+  border: 1px solid #d0d5d8;
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--sc-bg);
+  color: var(--sc-text);
+  box-sizing: border-box;
+}
+
+#scripted-chat * {
+  box-sizing: border-box;
+}
+
+.sc-header {
+  background: var(--sc-header);
+  color: white;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.sc-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-weight: bold;
+  flex-shrink: 0;
+}
+
+.sc-group-avatar {
+  background: #3c6257;
+}
+
+.sc-header-info {
+  min-width: 0;
+}
+
+.sc-title {
+  font-weight: bold;
+  font-size: 16px;
+}
+
+.sc-subtitle {
+  font-size: 12px;
+  opacity: 0.85;
+  margin-top: 3px;
+}
+
+.sc-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  background-color: var(--sc-bg);
+  background-image:
+    radial-gradient(
+      rgba(100, 100, 100, 0.06) 1px,
+      transparent 1px
+    );
+  background-size: 12px 12px;
+}
+
+.sc-message {
+  display: flex;
+  flex-direction: column;
+  max-width: 82%;
+  animation: sc-appear 0.2s ease-out;
+}
+
+.sc-message.bot {
+  align-self: flex-start;
+}
+
+.sc-message.user {
+  align-self: flex-end;
+}
+
+.sc-bubble {
+  padding: 9px 12px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  box-shadow: 0 1px 1px rgba(0,0,0,0.08);
+}
+
+.sc-message.bot .sc-bubble {
+  border-top-left-radius: 3px;
+  background: var(--sc-bubble-color, #ffffff);
+}
+
+.sc-message.user .sc-bubble {
+  background: var(--sc-user);
+  border-top-right-radius: 3px;
+}
+
+.sc-name {
+  font-size: 12px;
+  font-weight: bold;
+  margin-bottom: 3px;
+  color: var(--sc-name-color, #527c70);
+}
+
+.sc-meta {
+  font-size: 10px;
+  color: var(--sc-muted);
+  text-align: right;
+  margin-top: 4px;
+}
+
+.sc-typing {
+  align-self: flex-start;
+  background: white;
+  border-radius: 12px;
+  border-top-left-radius: 3px;
+  padding: 12px 15px;
+  display: flex;
+  gap: 4px;
+  animation: sc-appear 0.2s ease-out;
+}
+
+.sc-typing span {
+  width: 7px;
+  height: 7px;
+  background: #8a969d;
+  border-radius: 50%;
+  animation: sc-bounce 1.1s infinite ease-in-out;
+}
+
+.sc-typing span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.sc-typing span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+.sc-input-area {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  background: #f0f2f5;
+  border-top: 1px solid #d8dce0;
+}
+
+#sc-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  border-radius: 24px;
+  background: white;
+  padding: 12px 16px;
+  font-size: 15px;
+  outline: none;
+}
+
+#sc-send {
+  width: 42px;
+  height: 42px;
+  border: none;
+  border-radius: 50%;
+  background: #527c70;
+  color: white;
+  font-size: 18px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+#sc-send:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.sc-loading {
+  margin: auto;
+  color: #667781;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sc-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid #ccc;
+  border-top-color: #527c70;
+  border-radius: 50%;
+  animation: sc-spin 0.8s linear infinite;
+}
+
+.sc-system {
+  align-self: center;
+  background: rgba(255,255,255,0.8);
+  padding: 5px 10px;
+  border-radius: 8px;
+  font-size: 11px;
+  color: #667781;
+  margin: 6px 0;
+}
+
+@keyframes sc-appear {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes sc-bounce {
+  0%, 60%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-5px); }
+}
+
+@keyframes sc-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 600px) {
+  #scripted-chat {
+    height: 70vh;
+    min-height: 400px;
+    border-radius: 8px;
+  }
+
+  .sc-message {
+    max-width: 90%;
+  }
+}
+</style>
+
